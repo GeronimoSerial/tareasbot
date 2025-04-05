@@ -1,0 +1,23 @@
+{
+  "name": "tareasbot",
+  "version": "1.0.0",
+  "main": "src/server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "nodemon src/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@doist/todoist-api-typescript": "^4.0.0-alpha.7",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0",
+    "ngrok": "^5.0.0-beta.2",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
