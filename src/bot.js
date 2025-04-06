@@ -15,6 +15,7 @@ const COMMANDS = {
  * @param {Object} message - Mensaje recibido
  * @returns {string|Object} - Respuesta al mensaje
  */
+
 export async function handleMessage(message) {
   const text = message.text;
 

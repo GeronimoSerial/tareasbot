@@ -4,9 +4,7 @@ import { TODOIST_API } from "./config.js";
 // Instancia de la API de Todoist
 const api = new TodoistApi(TODOIST_API);
 
-/**
- * Prioridades de tareas
- */
+
 const PRIORITIES = {
   LOW: 1,
   MEDIUM: 2,
@@ -35,38 +33,7 @@ function parseTaskInput(text) {
   };
 }
 
-/**
- * Crea una nueva tarea en Todoist
- * @param {string} content - Contenido de la tarea
- * @param {string|null} dueString - Fecha de vencimiento en formato string
- * @param {number} priority - Prioridad de la tarea (1-4)
- * @returns {Promise<Object>} - La tarea creada
- */
-export async function createTask(rawText, priority = PRIORITIES.URGENT) {
-  try {
-    const { content, dueString } = parseTaskInput(rawText);
 
-    validateTaskParams(content, priority);
-
-    const task = await api.addTask({
-      content: content,
-      due_string: dueString,
-      priority: priority,
-    });
-
-    console.log("✅ Tarea creada:", task.content);
-    return task;
-  } catch (error) {
-    console.error("❌ Error creando tarea:", error.message);
-    throw new TaskError(`Error al crear la tarea: ${error.message}`);
-  }
-}
-
-/**
- * Valida los parámetros de la tarea
- * @param {string} content - Contenido de la tarea
- * @param {number} priority - Prioridad de la tarea
- */
 function validateTaskParams(content, priority) {
   if (!content || content.trim() === "") {
     throw new Error("El contenido de la tarea no puede estar vacío");
@@ -77,10 +44,27 @@ function validateTaskParams(content, priority) {
   }
 }
 
-/**
- * Obtiene todas las tareas del usuario
- * @returns {Promise<Array>} - Lista de tareas
- */
+
+export async function createTask(rawText, priority = PRIORITIES.URGENT) {
+  try {
+    const { content, dueString } = parseTaskInput(rawText);
+    
+    validateTaskParams(content, priority);
+    
+    const task = await api.addTask({
+      content: content,
+      due_string: dueString,
+      priority: priority,
+    });
+    
+    console.log("✅ Tarea creada:", task.content);
+    return task;
+  } catch (error) {
+    console.error("❌ Error creando tarea:", error.message);
+    throw new TaskError(`Error al crear la tarea: ${error.message}`);
+  }
+}
+
 export async function getAllTasks() {
   try {
     const response = await api.getTasks();
@@ -91,7 +75,7 @@ export async function getAllTasks() {
       ? response.results
       : [];
 
-    console.log(`📋 ${tasks.length} tareas recuperadas`);
+    console.log(`📋 ${tasks.length} tareas recuperadas en total`);
     return tasks;
   } catch (error) {
     console.error("❌ Error recuperando tareas:", error.message);
@@ -105,13 +89,13 @@ export async function getTodayTasks() {
 
     const allTasks = await getAllTasks();
 
-    console.log(`📋 ${allTasks.length} tareas recuperadas para hoy`);
-
+    
     const todayTasks = allTasks.filter((allTasks) => {
       return (
         allTasks.due?.date === today
-        );
+      );
     });
+    console.log(`📋 ${todayTasks.length} tareas recuperadas para hoy`);
     // console.log(todayTasks)
     return todayTasks;
   } catch (error) {

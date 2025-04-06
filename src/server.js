@@ -4,11 +4,11 @@ import fetch from "node-fetch";
 import ngrok from "ngrok";
 import { TELEGRAM_API } from "./config.js";
 import { handleMessage, getMenuMessage } from "./bot.js";
-import { createTask, getAllTasks, getTodayTasks} from "./todoist.js";
+import { createTask, getAllTasks, getTodayTasks } from "./todoist.js";
 
 // Estados de usuario
 const USER_STATES = {
-  WAITING_FOR_TASK: "waiting_for_task"
+  WAITING_FOR_TASK: "waiting_for_task",
 };
 
 // Callback data
@@ -18,6 +18,7 @@ const CALLBACK_ACTIONS = {
   TODAY_TASKS: "ver_tareas_hoy",
 };
 
+const lastBotMessage = {};
 /**
  * Clase principal para gestión del servidor y comunicación con Telegram
  */
@@ -26,7 +27,7 @@ class TelegramBotServer {
     this.app = express();
     this.port = process.env.PORT || 3000;
     this.userStates = {};
-    
+
     this.initializeMiddlewares();
     this.initializeRoutes();
   }
@@ -43,17 +44,18 @@ class TelegramBotServer {
    */
 
   checkId(chatId) {
-    const validIds = [7657527810]; // Reemplaza con tus IDs válidos
+    try {
+      const validIds = [7657527810]; // Reemplaza con tus IDs válidos
 
-    if (validIds.includes(chatId)) {
-      return true;
-    }
-    return false;
+      if (validIds.includes(chatId)) {
+        return true;
+      }
+      return false;
+    } catch (error) {}
   }
 
   initializeRoutes() {
     this.app.post("/webhook", this.handleWebhook.bind(this));
-    
   }
 
   /**
@@ -71,14 +73,14 @@ class TelegramBotServer {
       if (message) {
         const chatId = message.chat.id;
         const state = this.userStates[chatId];
-        
-        if(!this.checkId(chatId)) {
+
+        if (!this.checkId(chatId)) {
           console.log("ID no permitido:", chatId);
           message.text = "Este bot es solo para uso privado.";
           // await this.sendMessage(chatId, message.text);
           return res.sendStatus(403); // Forbidden
         }
-        
+
         if (state === USER_STATES.WAITING_FOR_TASK) {
           await this.handleTaskCreation(chatId, message.text, res);
           return;
@@ -99,24 +101,46 @@ class TelegramBotServer {
    * Envía un mensaje a un chat de Telegram
    */
   async sendMessage(chatId, textOrPayload) {
-    const payload = typeof textOrPayload === "string"
-      ? { chat_id: chatId, text: textOrPayload }
-      : { chat_id: chatId, ...textOrPayload };
+    try {
+      const payload =
+        typeof textOrPayload === "string"
+          ? { chat_id: chatId, text: textOrPayload }
+          : { chat_id: chatId, ...textOrPayload };
 
-    const response = await fetch(`${TELEGRAM_API}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+      const response = await fetch(`${TELEGRAM_API}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Error enviando mensaje: ${errorText}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Error enviando mensaje: ${errorText}`);
+      }
+
+      return response.json();
+    } catch (error) {
+      console.log("Error enviando mensaje:", error);
     }
-
-    return response.json();
   }
 
+  async deleteMessage(chatId, message) {
+    const messageId =
+      typeof message === "object" ? message.message_id : message;
+    const response = await fetch(`${TELEGRAM_API}/deleteMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+      }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Error eliminando mensaje: ${errorText}`);
+    }
+    return response.json();
+  }
   /**
    * Responde a una consulta de callback
    */
@@ -134,14 +158,17 @@ class TelegramBotServer {
   async handleCallbackQuery(callback_query, res) {
     const chatId = callback_query.message.chat.id;
     const data = callback_query.data;
-    console.log(chatId);  
+    console.log(chatId);
 
     switch (data) {
       case CALLBACK_ACTIONS.CREATE_TASK:
         this.userStates[chatId] = USER_STATES.WAITING_FOR_TASK;
-        await this.sendMessage(chatId, "📝 Por favor, proporciona el contenido de la tarea.");
+        await this.sendMessage(
+          chatId,
+          "📝 Por favor, proporciona el contenido de la tarea."
+        );
         break;
-        
+
       case CALLBACK_ACTIONS.VIEW_TASKS:
         await this.displayTasks(chatId);
         break;
@@ -150,7 +177,6 @@ class TelegramBotServer {
         await this.handleTodayTasks(chatId);
         break;
 
-        
       default:
         await this.sendMessage(chatId, "❌ Opción no válida.");
     }
@@ -175,20 +201,21 @@ class TelegramBotServer {
       const taskList = tasks
         .map((t, i) => `🔹 ${i + 1}. ${t.content}`)
         .join("\n");
-      
+
       await this.sendMessage(chatId, `📋 Tus tareas:\n\n${taskList}`);
     } catch (error) {
       console.error("Error al obtener tareas:", error);
       await this.sendMessage(
-        chatId, 
-        "❌ No se pudieron obtener las tareas: " + (error.message || "Error desconocido")
+        chatId,
+        "❌ No se pudieron obtener las tareas: " +
+          (error.message || "Error desconocido")
       );
     }
   }
 
   //CCDIGO A REUTILIZAR ->>>>>>>>>
-  
- async handleTodayTasks(chatId) {
+
+  async handleTodayTasks(chatId) {
     try {
       const tasks = await getTodayTasks();
 
@@ -200,18 +227,17 @@ class TelegramBotServer {
       const taskList = tasks
         .map((t, i) => `🔹 ${i + 1}. ${t.content}`)
         .join("\n");
-      
+
       await this.sendMessage(chatId, `📋 Tus tareas para hoy:\n\n${taskList}`);
     } catch (error) {
       console.error("Error al obtener tareas:", error);
       await this.sendMessage(
-        chatId, 
-        "❌ No se pudieron obtener las tareas: " + (error.message || "Error desconocido")
+        chatId,
+        "❌ No se pudieron obtener las tareas: " +
+          (error.message || "Error desconocido")
       );
     }
-
-
-}
+  }
 
   /**
    * Maneja la creación de tareas
@@ -219,11 +245,14 @@ class TelegramBotServer {
   async handleTaskCreation(chatId, taskContent, res) {
     try {
       await createTask(taskContent);
-      await this.sendMessage(chatId, `✅ Tarea "${taskContent}" añadida correctamente.`);
+      await this.sendMessage(
+        chatId,
+        `✅ Tarea "${taskContent}" añadida correctamente.`
+      );
     } catch (error) {
       console.error("Error creando tarea:", error);
       await this.sendMessage(
-        chatId, 
+        chatId,
         `❌ Error al añadir la tarea: ${error.message || "Error desconocido"}`
       );
     }
@@ -239,9 +268,18 @@ class TelegramBotServer {
   async handleRegularMessage(message, res) {
     try {
       const chatId = message.chat.id;
+      const lastMessageId = lastBotMessage[chatId];
+      if (lastMessageId) {
+        try {
+          await this.deleteMessage(chatId, { message_id: lastMessageId });
+        } catch (error) {
+          console.error("Error eliminando mensaje:", error);
+        }
+      }
       const reply = await handleMessage(message);
-      
-      await this.sendMessage(chatId, reply);
+
+      const sent = await this.sendMessage(chatId, reply);
+      console.log("Mensaje enviado:", sent);
       res.sendStatus(200);
     } catch (error) {
       console.error("Error manejando mensaje:", error);
@@ -279,7 +317,7 @@ class TelegramBotServer {
     });
 
     const data = await response.json();
-    
+
     if (data.ok) {
       console.log(`📬 Webhook configurado correctamente: ${data.description}`);
     } else {
@@ -290,4 +328,6 @@ class TelegramBotServer {
 
 // Iniciar el servidor
 const server = new TelegramBotServer();
-server.start().catch(err => console.error("Error al iniciar el servidor:", err));
+server
+  .start()
+  .catch((err) => console.error("Error al iniciar el servidor:", err));
