@@ -262,62 +262,37 @@ class TelegramBotServer {
     res.sendStatus(200);
   }
 
-async function handleRegularMessage(message, res) {
-  const chatId = message.chat.id;
-  const reply = await handleMessage(message);
-  const payload = {
-    chat_id: chatId,
-    ...(typeof reply === "string" ? { text: reply } : reply),
-  };
+  /**
+   * Maneja mensajes regulares
+   */
+  async handleRegularMessage(message, res) {
+    try {
+      const chatId = message.chat.id;
+      const lastMessageId = lastBotMessage[chatId];
+      if (lastMessageId) {
+        try {
+          await this.deleteMessage(chatId, { message_id: lastMessageId });
+        } catch (error) {
+          console.error("Error eliminando mensaje:", error);
+        }
+      }
+      const reply = await handleMessage(message);
 
-  await fetch(`${TELEGRAM_API}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  return res.sendStatus(200);
-}
-
-// Endpoint principal para webhook
-app.post("/webhook", async (req, res) => {
-  const { message, callback_query } = req.body;
-
-  // Verificar si hay un mensaje o un callback_query de notion
-  if (req.headers["notion-verification-token"]){
-    const token = req.headers["notion-verification-token"];
-    console.log("Webhook de Notion recibido:", req.body);
-    console.log("Token de verificación de Notion:", token);
-    return res.sendStatus(200).send(token); // Responder a Notion
-  }
-
-
-  // Manejar callbacks de botones
-  if (callback_query) {
-    return handleCallbackQuery(callback_query, res);
-  }
-
-  // Manejar mensajes de texto
-  if (message) {
-    const chatId = message.chat.id;
-    const state = userStates[chatId];
-
-    // Si está esperando una tarea
-    if (state === "waiting_for_task") {
-      return handleTaskCreation(chatId, message.text, res);
+      const sent = await this.sendMessage(chatId, reply);
+      console.log("Mensaje enviado:", sent);
+      res.sendStatus(200);
+    } catch (error) {
+      console.error("Error manejando mensaje:", error);
+      res.status(500).send("Error procesando mensaje");
     }
-
-    // Manejar otros mensajes
-    return handleRegularMessage(message, res);
   }
 
-  res.sendStatus(200);
-});
-
-// Inicialización del servidor
-async function initServer() {
-  app.listen(PORT, async () => {
-    console.log(`🚀 Servidor escuchando en http://localhost:${PORT}`);
+  /**
+   * Inicia el servidor
+   */
+  async start() {
+    this.server = this.app.listen(this.port, async () => {
+      console.log(`🚀 Servidor escuchando en http://localhost:${this.port}`);
 
       try {
         const url = await ngrok.connect(this.port);
