@@ -4,141 +4,312 @@ import fetch from "node-fetch";
 import ngrok from "ngrok";
 import { TELEGRAM_API } from "./config.js";
 import { handleMessage, getMenuMessage } from "./bot.js";
-import { createTask, getTasks } from "./todoist.js";
+import { createTask, getAllTasks, getTodayTasks } from "./todoist.js";
 
-// Configuración de la aplicación
-const app = express();
-const PORT = process.env.PORT || 3000;
-const userStates = {};
+// Estados de usuario
+const USER_STATES = {
+  WAITING_FOR_TASK: "waiting_for_task",
+};
 
-// Middlewares
-app.use(bodyParser.json());
+// Callback data
+const CALLBACK_ACTIONS = {
+  CREATE_TASK: "crear_tarea",
+  VIEW_TASKS: "ver_tareas",
+  TODAY_TASKS: "ver_tareas_hoy",
+};
 
-// Funciones auxiliares para Telegram
-async function sendMessage(chatId, textOrPayload) {
-  const payload = typeof textOrPayload === "string"
-    ? { chat_id: chatId, text: textOrPayload }
-    : { chat_id: chatId, ...textOrPayload };
+const lastBotMessage = {};
+/**
+ * Clase principal para gestión del servidor y comunicación con Telegram
+ */
+class TelegramBotServer {
+  constructor() {
+    this.app = express();
+    this.port = process.env.PORT || 3000;
+    this.userStates = {};
 
-  await fetch(`${TELEGRAM_API}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-}
+    this.initializeMiddlewares();
+    this.initializeRoutes();
+  }
 
-async function answerCallback(callback_query_id) {
-  await fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ callback_query_id }),
-  });
-}
+  /**
+   * Configura los middlewares de Express
+   */
+  initializeMiddlewares() {
+    this.app.use(bodyParser.json());
+  }
 
-// Manejadores de eventos
-async function handleCallbackQuery(callback_query, res) {
-  const chatId = callback_query.message.chat.id;
-  const data = callback_query.data;
+  /**
+   * Configura las rutas de la API
+   */
 
-  switch (data) {
-    case "crear_tarea":
-      userStates[chatId] = "waiting_for_task";
-      await sendMessage(chatId, "📝 Por favor, proporciona el contenido de la tarea.");
-      break;
-    case "ver_tareas":
-      try {
-        const tasks = await getTasks(); // Obtén las tareas
+  checkId(chatId) {
+    try {
+      const validIds = [7657527810]; // Reemplaza con tus IDs válidos
 
-        if (!Array.isArray(tasks)) {
-          console.error("Error: tasks no es un arreglo", tasks);
-          await sendMessage(chatId, "❌ Error inesperado al obtener las tareas.");
+      if (validIds.includes(chatId)) {
+        return true;
+      }
+      return false;
+    } catch (error) {}
+  }
+
+  initializeRoutes() {
+    this.app.post("/webhook", this.handleWebhook.bind(this));
+  }
+
+  /**
+   * Maneja las solicitudes al webhook
+   */
+  async handleWebhook(req, res) {
+    const { message, callback_query } = req.body;
+
+    try {
+      if (callback_query) {
+        await this.handleCallbackQuery(callback_query, res);
+        return;
+      }
+
+      if (message) {
+        const chatId = message.chat.id;
+        const state = this.userStates[chatId];
+
+        if (!this.checkId(chatId)) {
+          console.log("ID no permitido:", chatId);
+          message.text = "Este bot es solo para uso privado.";
+          // await this.sendMessage(chatId, message.text);
+          return res.sendStatus(403); // Forbidden
+        }
+
+        if (state === USER_STATES.WAITING_FOR_TASK) {
+          await this.handleTaskCreation(chatId, message.text, res);
           return;
         }
 
-        if (tasks.length === 0) {
-          await sendMessage(chatId, "🎉 No tienes tareas pendientes.");
-        } else {
-          const taskList = tasks.map((t, i) => `🔹 ${i + 1}. ${t.content}`).join("\n");
-          await sendMessage(chatId, `📋 Tus tareas:\n\n${taskList}`);
-        }
-      } catch (error) {
-        console.error("Error al manejar las tareas:", error);
-        await sendMessage(chatId, "❌ No se pudieron obtener las tareas. " + error.message);
+        await this.handleRegularMessage(message, res);
+        return;
       }
-      break;
-    default:
-      await sendMessage(chatId, "❌ Opción no válida.");
+
+      res.sendStatus(200);
+    } catch (error) {
+      console.error("Error en webhook:", error);
+      res.status(500).send("Error interno del servidor");
+    }
   }
 
-  await answerCallback(callback_query.id);
-  return res.sendStatus(200);
-}
+  /**
+   * Envía un mensaje a un chat de Telegram
+   */
+  async sendMessage(chatId, textOrPayload) {
+    try {
+      const payload =
+        typeof textOrPayload === "string"
+          ? { chat_id: chatId, text: textOrPayload }
+          : { chat_id: chatId, ...textOrPayload };
 
-async function handleTaskCreation(chatId, taskContent, res) {
-  try {
-    await createTask(taskContent);
-    await sendMessage(chatId, `✅ Tarea "${taskContent}" añadida correctamente.`);
-  } catch (error) {
-    await sendMessage(chatId, `❌ Error al añadir la tarea.`);
+      const response = await fetch(`${TELEGRAM_API}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Error enviando mensaje: ${errorText}`);
+      }
+
+      return response.json();
+    } catch (error) {
+      console.log("Error enviando mensaje:", error);
+    }
   }
 
-  userStates[chatId] = null; // Limpiar estado
-  await sendMessage(chatId, getMenuMessage());
-  return res.sendStatus(200);
-}
-
-async function handleRegularMessage(message, res) {
-  const chatId = message.chat.id;
-  const reply = await handleMessage(message);
-  const payload = {
-    chat_id: chatId,
-    ...(typeof reply === "string" ? { text: reply } : reply),
-  };
-
-  await fetch(`${TELEGRAM_API}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  return res.sendStatus(200);
-}
-
-// Endpoint principal para webhook
-app.post("/webhook", async (req, res) => {
-  const { message, callback_query } = req.body;
-
-  // Manejar callbacks de botones
-  if (callback_query) {
-    return handleCallbackQuery(callback_query, res);
+  async deleteMessage(chatId, message) {
+    const messageId =
+      typeof message === "object" ? message.message_id : message;
+    const response = await fetch(`${TELEGRAM_API}/deleteMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+      }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Error eliminando mensaje: ${errorText}`);
+    }
+    return response.json();
+  }
+  /**
+   * Responde a una consulta de callback
+   */
+  async answerCallback(callback_query_id) {
+    await fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ callback_query_id }),
+    });
   }
 
-  // Manejar mensajes de texto
-  if (message) {
-    const chatId = message.chat.id;
-    const state = userStates[chatId];
+  /**
+   * Maneja las consultas de los botones inline
+   */
+  async handleCallbackQuery(callback_query, res) {
+    const chatId = callback_query.message.chat.id;
+    const data = callback_query.data;
+    console.log(chatId);
 
-    // Si está esperando una tarea
-    if (state === "waiting_for_task") {
-      return handleTaskCreation(chatId, message.text, res);
+    switch (data) {
+      case CALLBACK_ACTIONS.CREATE_TASK:
+        this.userStates[chatId] = USER_STATES.WAITING_FOR_TASK;
+        await this.sendMessage(
+          chatId,
+          "📝 Por favor, proporciona el contenido de la tarea."
+        );
+        break;
+
+      case CALLBACK_ACTIONS.VIEW_TASKS:
+        await this.displayTasks(chatId);
+        break;
+
+      case CALLBACK_ACTIONS.TODAY_TASKS:
+        await this.handleTodayTasks(chatId);
+        break;
+
+      default:
+        await this.sendMessage(chatId, "❌ Opción no válida.");
     }
 
-    // Manejar otros mensajes
-    return handleRegularMessage(message, res);
+    await this.answerCallback(callback_query.id);
+    res.sendStatus(200);
   }
 
-  res.sendStatus(200);
-});
+  /**
+   * Muestra las tareas al usuario
+   */
+  async displayTasks(chatId) {
+    try {
+      const tasks = await getAllTasks();
+      console.log("Tareas obtenidas:", tasks);
 
-// Inicialización del servidor
-async function initServer() {
-  app.listen(PORT, async () => {
-    console.log(`🚀 Servidor escuchando en http://localhost:${PORT}`);
+      if (!tasks || tasks.length === 0) {
+        await this.sendMessage(chatId, "🎉 No tienes tareas pendientes.");
+        return;
+      }
 
-    const url = await ngrok.connect(PORT);
-    console.log(`🔗 Ngrok tunnel abierto en: ${url}`);
+      const taskList = tasks
+        .map((t, i) => `🔹 ${i + 1}. ${t.content}`)
+        .join("\n");
 
-    const webhookUrl = `${url}/webhook`;
+      await this.sendMessage(chatId, `📋 Tus tareas:\n\n${taskList}`);
+    } catch (error) {
+      console.error("Error al obtener tareas:", error);
+      await this.sendMessage(
+        chatId,
+        "❌ No se pudieron obtener las tareas: " +
+          (error.message || "Error desconocido")
+      );
+    }
+  }
+
+  //CCDIGO A REUTILIZAR ->>>>>>>>>
+
+  async handleTodayTasks(chatId) {
+    try {
+      const tasks = await getTodayTasks();
+
+      if (!tasks || tasks.length === 0) {
+        await this.sendMessage(chatId, "🎉 No tienes tareas para hoy.");
+        return;
+      }
+
+      const taskList = tasks
+        .map((t, i) => `🔹 ${i + 1}. ${t.content}`)
+        .join("\n");
+
+      await this.sendMessage(chatId, `📋 Tus tareas para hoy:\n\n${taskList}`);
+    } catch (error) {
+      console.error("Error al obtener tareas:", error);
+      await this.sendMessage(
+        chatId,
+        "❌ No se pudieron obtener las tareas: " +
+          (error.message || "Error desconocido")
+      );
+    }
+  }
+
+  /**
+   * Maneja la creación de tareas
+   */
+  async handleTaskCreation(chatId, taskContent, res) {
+    try {
+      await createTask(taskContent);
+      await this.sendMessage(
+        chatId,
+        `✅ Tarea "${taskContent}" añadida correctamente.`
+      );
+    } catch (error) {
+      console.error("Error creando tarea:", error);
+      await this.sendMessage(
+        chatId,
+        `❌ Error al añadir la tarea: ${error.message || "Error desconocido"}`
+      );
+    }
+
+    this.userStates[chatId] = null;
+    await this.sendMessage(chatId, getMenuMessage());
+    res.sendStatus(200);
+  }
+
+  /**
+   * Maneja mensajes regulares
+   */
+  async handleRegularMessage(message, res) {
+    try {
+      const chatId = message.chat.id;
+      const lastMessageId = lastBotMessage[chatId];
+      if (lastMessageId) {
+        try {
+          await this.deleteMessage(chatId, { message_id: lastMessageId });
+        } catch (error) {
+          console.error("Error eliminando mensaje:", error);
+        }
+      }
+      const reply = await handleMessage(message);
+
+      const sent = await this.sendMessage(chatId, reply);
+      console.log("Mensaje enviado:", sent);
+      res.sendStatus(200);
+    } catch (error) {
+      console.error("Error manejando mensaje:", error);
+      res.status(500).send("Error procesando mensaje");
+    }
+  }
+
+  /**
+   * Inicia el servidor
+   */
+  async start() {
+    this.server = this.app.listen(this.port, async () => {
+      console.log(`🚀 Servidor escuchando en http://localhost:${this.port}`);
+
+      try {
+        const url = await ngrok.connect(this.port);
+        console.log(`🔗 Ngrok tunnel abierto en: ${url}`);
+
+        const webhookUrl = `${url}/webhook`;
+        await this.setupWebhook(webhookUrl);
+      } catch (error) {
+        console.error("Error configurando ngrok o webhook:", error);
+      }
+    });
+  }
+
+  /**
+   * Configura el webhook de Telegram
+   */
+  async setupWebhook(webhookUrl) {
     const response = await fetch(`${TELEGRAM_API}/setWebhook`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -146,9 +317,17 @@ async function initServer() {
     });
 
     const data = await response.json();
-    console.log(`📬 Respuesta del webhook: ${data.description}`);
-  });
+
+    if (data.ok) {
+      console.log(`📬 Webhook configurado correctamente: ${data.description}`);
+    } else {
+      console.error(`❌ Error configurando webhook: ${data.description}`);
+    }
+  }
 }
 
 // Iniciar el servidor
-initServer().catch(err => console.error("Error al iniciar el servidor:", err));
+const server = new TelegramBotServer();
+server
+  .start()
+  .catch((err) => console.error("Error al iniciar el servidor:", err));
