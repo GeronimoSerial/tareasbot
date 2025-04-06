@@ -108,6 +108,15 @@ async function handleRegularMessage(message, res) {
 app.post("/webhook", async (req, res) => {
   const { message, callback_query } = req.body;
 
+  // Verificar si hay un mensaje o un callback_query de notion
+  if (req.headers["notion-verification-token"]){
+    const token = req.headers["notion-verification-token"];
+    console.log("Webhook de Notion recibido:", req.body);
+    console.log("Token de verificación de Notion:", token);
+    return res.sendStatus(200).send(token); // Responder a Notion
+  }
+
+
   // Manejar callbacks de botones
   if (callback_query) {
     return handleCallbackQuery(callback_query, res);
